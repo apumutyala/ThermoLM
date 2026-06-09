@@ -1,0 +1,77 @@
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "thermolm-jax"
+version = "0.1.0"
+description = "Quadratic-Ising energy-based models on THRML, with exploratory energy-diffusion LM components"
+readme = "README.md"
+requires-python = ">=3.9"
+license = {text = "MIT"}
+authors = [
+    {name = "Apuroop Mutyala", email = "amutyala3@gatech.edu"},
+]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Science/Research",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+]
+
+# Core runtime dependencies for the validated DTM / quadratic-Ising track.
+# NOTE: `thrml` is NOT listed here because it is vendored as a git submodule at
+# external/thrml and installed separately (`pip install -e external/thrml`).
+# Path/URL dependencies in [project] break `pip install` from an index, so we
+# keep the THRML install as an explicit, documented step (see README Quickstart).
+dependencies = [
+    "jax>=0.4.20",
+    "jaxlib>=0.4.20",
+    "flax>=0.7.0",
+    "optax>=0.1.0",
+    "equinox>=0.11.0",
+    "numpy>=1.24.0",
+]
+
+[project.optional-dependencies]
+# Plotting for the demo script (sample visualisation).
+viz = [
+    "matplotlib>=3.7.0",
+]
+# Dependencies for the EXPLORATORY language-model components under experimental/.
+# Not required for the validated DTM/Ising demo or tests.
+llm = [
+    "transformers>=4.30.0",
+    "datasets>=2.14.0",
+    "tokenizers>=0.13.0",
+    "wandb>=0.15.0",
+    "pyyaml>=6.0",
+]
+dev = [
+    "pytest>=7.4.0",
+    "pytest-cov>=4.1.0",
+    "black>=23.7.0",
+    "isort>=5.12.0",
+    "mypy>=1.5.0",
+]
+
+[project.urls]
+Homepage = "https://github.com/apumutyala/ThermoLM"
+Repository = "https://github.com/apumutyala/ThermoLM"
+
+[tool.setuptools.packages.find]
+include = ["thermolm_jax*"]
+
+[tool.black]
+line-length = 100
+target-version = ['py39', 'py310', 'py311']
+
+[tool.isort]
+profile = "black"
+line_length = 100
+
+[tool.mypy]
+python_version = "3.9"
+warn_return_any = true
+warn_unused_configs = true

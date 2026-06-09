@@ -1,0 +1,22 @@
+# Core runtime dependencies for the validated DTM / quadratic-Ising track.
+# This mirrors [project].dependencies in pyproject.toml; prefer:  pip install -e .
+# THRML is vendored under external/thrml and installed separately:
+#   pip install -e external/thrml
+
+jax>=0.4.20
+jaxlib>=0.4.20
+flax>=0.7.0
+optax>=0.1.0
+equinox>=0.11.0
+numpy>=1.24.0
+
+# Optional: plotting for the demo script (scripts/dtm_ising_demo.py)
+#   pip install -e ".[viz]"
+# matplotlib>=3.7.0
+
+# Optional: exploratory language-model components under experimental/
+#   pip install -e ".[llm]"
+# transformers>=4.30.0
+# datasets>=2.14.0
+# tokenizers>=0.13.0
+# wandb>=0.15.0
