@@ -169,71 +169,23 @@ class QuadraticEBM(eqx.Module):
         batch_size: int = 1
     ) -> jnp.ndarray:
         """
-        Initialize state using Hinton's method.
-        
-        Mathematical Note:
-        - P(S_i = 1) = σ(β h_i)
-        - Each unit sampled independently
-        - Initializes near equilibrium distribution
-        - hinton_init returns bool, convert to {-1, 1}
-        
+        Initialize state from the bias marginal (Hinton's heuristic).
+
+        Each unit is sampled independently as P(S_i = +1) = σ(β h_i) — the
+        couplings play no role, so this is three lines of JAX. (An earlier
+        version built a full THRML IsingEBM with an O(n²) Python edge loop
+        just to call thrml's hinton_init; equivalent, but wasteful.)
+
         Args:
             key: JAX random key
             batch_size: Number of samples to initialize
-        
+
         Returns:
-            initialized_state: Initial state in {-1, 1} format, shape (batch_size, n_vars)
+            initialized_state: spins in {-1, +1}, shape (batch_size, n_vars)
         """
-        from thrml.models import hinton_init
-        from thrml.block_management import Block
-        from thrml.pgm import SpinNode
-        from thrml.models import IsingEBM
-        
-        n_vars = len(self.h)
-        
-        # Create THRML nodes
-        nodes = [SpinNode() for _ in range(n_vars)]
-        
-        # Create sparse edges for IsingEBM
-        edges = []
-        edge_weights = []
-        for i in range(n_vars):
-            for j in range(i + 1, n_vars):
-                if self.connectivity_mask[i, j]:
-                    edges.append((nodes[i], nodes[j]))
-                    edge_weights.append(self.J[i, j])
-        
-        # Create IsingEBM
-        ising_ebm = IsingEBM(
-            nodes=nodes,
-            edges=edges,
-            biases=self.h,
-            weights=jnp.array(edge_weights),
-            beta=jnp.array(self.beta)
-        )
-        
-        # Create blocks (single block with all nodes)
-        blocks = [Block(nodes)]
-        
-        # Initialize using THRML's hinton_init
-        # Returns list of boolean arrays, one per block
-        init_state_bool_list = hinton_init(
-            key=key,
-            model=ising_ebm,
-            blocks=blocks,
-            batch_shape=(batch_size,)
-        )
-        
-        # hinton_init returns list[Array], one per block
-        # For single block: init_state_bool_list[0] has shape (batch_size, n_vars)
-        init_state_bool = init_state_bool_list[0]
-        
-        # Convert from bool to {-1, 1}
-        # bool True → 2*1-1 = +1
-        # bool False → 2*0-1 = -1
-        init_state = 2 * init_state_bool.astype(jnp.int8) - 1
-        
-        return init_state
+        p_plus = jax.nn.sigmoid(self.beta * self.h)
+        bern = jax.random.bernoulli(key, p_plus, shape=(batch_size, len(self.h)))
+        return 2 * bern.astype(jnp.int8) - 1
 
 
 def test_quadratic_ebm():

@@ -1,15 +1,15 @@
 """
 Sparse Connectivity Patterns for DTM
 
-Implements sparse connectivity patterns from Extropic.pdf Table I.
-These patterns define which variables interact in the quadratic EBM,
-enabling efficient Gibbs sampling and TSU hardware compatibility.
+Defines nested families of sparse interaction graphs for the quadratic EBM.
+Sparsity is what makes block Gibbs cheap (few colours, low degree) and what
+maps onto locally-connected TSU hardware.
 
-Design Decision: Sparse Connectivity Patterns
-- Rationale: Required by Extropic.pdf for TSU hardware efficiency
-- Impact: Limits interactions to local neighbors
-- Trade-off: Limited expressivity vs energy efficiency
-- Downstream: Enables parallel block Gibbs sampling
+NAMING NOTE: the G8..G24 labels are *loosely inspired by* the graph families
+in Extropic's DTM paper (Table I), not a faithful reimplementation of them —
+e.g. our 1-D "G8" is a skip-1 chain (2 neighbours/node), not an
+8-neighbour graph. Treat the labels as ordered sparsity tiers
+(G8 ⊂ G12 ⊂ G16 ⊂ G20 ⊂ G24), nothing more.
 
 Author: Apuroop Mutyala
 Date: April 16, 2026
@@ -23,23 +23,27 @@ from typing import List, Tuple, Optional
 def generate_connectivity_pattern(
     pattern: str,
     n_vars: int,
-    graph_type: str = "bipartite"
+    graph_type: str = "banded"
 ) -> jnp.ndarray:
     """
-    Generate sparse connectivity patterns from Extropic.pdf Table I.
-    
+    Generate a sparse connectivity mask.
+
     Args:
         pattern: Connectivity pattern name ("G8", "G12", "G16", "G20", "G24")
         n_vars: Number of variables
-        graph_type: Type of graph ("grid" for 2D images, "bipartite" for language)
-    
+        graph_type: "grid" (2D neighbourhoods), "banded" (1-D skip-distance
+            bands — the sequence-model default), or "chain" (short-range 1-D).
+            "bipartite" is accepted as a deprecated alias for "banded": these
+            banded graphs are NOT bipartite for G12+ (even skip distances
+            connect same-parity nodes), so the old name was misleading.
+
     Returns:
         connectivity_mask: Boolean adjacency matrix, shape (n_vars, n_vars)
     """
     if graph_type == "grid":
         return _generate_grid_pattern(pattern, n_vars)
-    elif graph_type == "bipartite":
-        return _generate_bipartite_pattern(pattern, n_vars)
+    elif graph_type in ("banded", "bipartite"):
+        return _generate_banded_pattern(pattern, n_vars)
     elif graph_type == "chain":
         return _generate_chain_pattern(pattern, n_vars)
     else:
@@ -49,8 +53,8 @@ def generate_connectivity_pattern(
 def _generate_grid_pattern(pattern: str, n_vars: int) -> jnp.ndarray:
     """
     Generate 2D grid connectivity patterns for image data.
-    
-    Patterns from Extropic.pdf Table I:
+
+    Nested 2-D neighbourhoods (labels are sparsity tiers, see module note):
     - G8: Nearest neighbors on 2D grid (4-connectivity)
     - G12: G8 + diagonal neighbors (8-connectivity)
     - G16: G12 + next-nearest neighbors
@@ -96,7 +100,7 @@ def _generate_grid_pattern(pattern: str, n_vars: int) -> jnp.ndarray:
     return mask
 
 
-def _generate_bipartite_pattern(pattern: str, n_vars: int) -> jnp.ndarray:
+def _generate_banded_pattern(pattern: str, n_vars: int) -> jnp.ndarray:
     """
     Generate banded (skip-distance) 1D connectivity patterns.
 
@@ -110,11 +114,12 @@ def _generate_bipartite_pattern(pattern: str, n_vars: int) -> jnp.ndarray:
     - G20: skips 1, 2, 4, 8
     - G24: all distances     (dense)
 
-    NOTE: an earlier version restricted edges to opposite-parity endpoints so it
-    could 2-colour by even/odd index. That filter silently *dropped every
-    even-distance skip*, collapsing G12/G16/G20 to G8. The restriction is
-    removed here; the samplers no longer assume an even/odd colouring — they
-    derive a valid colouring from the graph via
+    These graphs are NOT bipartite for G12+ (even skips connect same-parity
+    nodes) — hence the rename from the old "bipartite" label. An even earlier
+    version restricted edges to opposite-parity endpoints so it could 2-colour
+    by even/odd index; that filter silently *dropped every even-distance
+    skip*, collapsing G12/G16/G20 to G8. The samplers derive a valid colouring
+    from the actual graph via
     ``thermolm_jax.sampling.chromatic_gibbs.greedy_coloring``.
     """
     mask = jnp.zeros((n_vars, n_vars), dtype=bool)
@@ -176,65 +181,48 @@ def _generate_chain_pattern(pattern: str, n_vars: int) -> jnp.ndarray:
 def get_connectivity_density(mask: jnp.ndarray) -> float:
     """
     Compute the density of connectivity (fraction of possible edges present).
-    
+
     Args:
-        mask: Boolean adjacency matrix
-    
+        mask: Boolean adjacency matrix (diagonal assumed empty)
+
     Returns:
-        density: Fraction of non-zero edges
+        density: Fraction of the n*(n-1) possible directed edges present.
+            (An earlier version divided by n^2, counting impossible
+            self-loops in the denominator.)
     """
     n_vars = mask.shape[0]
-    n_possible = n_vars * n_vars
+    n_possible = n_vars * (n_vars - 1)
     n_actual = jnp.sum(mask)
     return float(n_actual / n_possible)
-
-
-def get_bipartite_coloring(n_vars: int) -> Tuple[List[int], List[int]]:
-    """
-    Get bipartite coloring for block Gibbs sampling.
-    
-    For a bipartite graph, returns two color blocks (even and odd indices).
-    This enables parallel updates of all even positions, then all odd positions.
-    
-    Args:
-        n_vars: Number of variables
-    
-    Returns:
-        color0: Indices for color 0 (even positions)
-        color1: Indices for color 1 (odd positions)
-    """
-    color0 = [i for i in range(n_vars) if i % 2 == 0]
-    color1 = [i for i in range(n_vars) if i % 2 == 1]
-    return color0, color1
 
 
 def test_connectivity_patterns():
     """Test connectivity pattern generation."""
     print("Testing connectivity patterns...")
-    
-    # Test bipartite patterns
+
+    # Test banded patterns
     for pattern in ["G8", "G12", "G16", "G20", "G24"]:
-        mask = generate_connectivity_pattern(pattern, n_vars=64, graph_type="bipartite")
+        mask = generate_connectivity_pattern(pattern, n_vars=64, graph_type="banded")
         density = get_connectivity_density(mask)
-        print(f"{pattern} bipartite: density={density:.4f}")
-        
+        print(f"{pattern} banded: density={density:.4f}")
+
         # Verify symmetric
         assert jnp.array_equal(mask, mask.T), f"{pattern} mask not symmetric"
-        
+
         # Verify no self-connections
         assert jnp.all(jnp.diagonal(mask) == 0), f"{pattern} has self-connections"
-    
+
     # Test grid patterns
     for pattern in ["G8", "G12", "G16"]:
         mask = generate_connectivity_pattern(pattern, n_vars=64, graph_type="grid")
         density = get_connectivity_density(mask)
         print(f"{pattern} grid: density={density:.4f}")
-    
-    # Test bipartite coloring
-    color0, color1 = get_bipartite_coloring(64)
-    print(f"Bipartite coloring: color0={len(color0)} nodes, color1={len(color1)} nodes")
-    assert len(color0) + len(color1) == 64
-    
+
+    # Deprecated alias still works
+    a = generate_connectivity_pattern("G12", 32, graph_type="bipartite")
+    b = generate_connectivity_pattern("G12", 32, graph_type="banded")
+    assert jnp.array_equal(a, b)
+
     print("[SUCCESS] Connectivity patterns test passed!")
 
 

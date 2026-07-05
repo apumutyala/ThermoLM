@@ -135,12 +135,15 @@ def compute_energy_from_weights(
 ) -> jnp.ndarray:
     """
     Compute energy E(codes) from factor weights.
-    
-    E(codes) = -sum(unary_weights[i, codes[i]]) 
+
+    E(codes) = -sum(unary_weights[i, codes[i]])
                - sum(pairwise_weights[i, codes[i], codes[i+1]])
-    
-    This is the negative of THRML's energy function (sign convention).
-    
+
+    This MATCHES THRML's factor energy convention exactly: a discrete EBM
+    factor's energy is -sum(weights[gathered]), so p ∝ exp(+score) with
+    score = sum of gathered weights. The same tensors can therefore be handed
+    to THRML's categorical factors unchanged (see chain_mrf_thrml.py).
+
     Phase 2.7: Energy computation from factor weights
     
     Args:

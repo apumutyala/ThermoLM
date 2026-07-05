@@ -16,12 +16,18 @@ potential tensors are passed through unchanged (temperature folded in as / T).
 import jax
 import jax.numpy as jnp
 
-from thrml import Block, BlockGibbsSpec, SamplingSchedule, sample_states, CategoricalNode
-from thrml.factor import FactorSamplingProgram
-from thrml.models.discrete_ebm import (
+from thrml import (
+    Block,
+    BlockGibbsSpec,
+    CategoricalNode,
+    FactorSamplingProgram,
+    SamplingSchedule,
+    sample_states,
+)
+from thrml.models import (
     CategoricalEBMFactor,
-    SquareCategoricalEBMFactor,
     CategoricalGibbsConditional,
+    SquareCategoricalEBMFactor,
 )
 
 

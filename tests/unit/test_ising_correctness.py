@@ -164,7 +164,7 @@ def test_connectivity_patterns_are_nested():
     """G8 ⊂ G12 ⊂ G16 ⊂ G20 ⊂ G24: edge density strictly increases."""
     n = 32
     dens = [
-        get_connectivity_density(generate_connectivity_pattern(p, n, graph_type="bipartite"))
+        get_connectivity_density(generate_connectivity_pattern(p, n, graph_type="banded"))
         for p in ["G8", "G12", "G16", "G20", "G24"]
     ]
     assert all(dens[i] < dens[i + 1] for i in range(len(dens) - 1)), dens
@@ -172,7 +172,7 @@ def test_connectivity_patterns_are_nested():
 
 def test_greedy_coloring_is_valid():
     """No two adjacent nodes share a colour."""
-    mask = np.asarray(generate_connectivity_pattern("G12", 24, graph_type="bipartite"))
+    mask = np.asarray(generate_connectivity_pattern("G12", 24, graph_type="banded"))
     colors = greedy_coloring(jnp.asarray(mask))
     i, j = np.nonzero(np.triu(mask, 1))
     assert np.all(colors[i] != colors[j])

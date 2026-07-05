@@ -82,3 +82,7 @@ external/thrml/.github/
 
 # Legacy PyTorch scratch code, irrelevant to the JAX project.
 archive/
+
+# Local artifacts
+thermolm-runpod.zip
+runs/

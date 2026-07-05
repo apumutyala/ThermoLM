@@ -1,16 +1,15 @@
 """
-Utils module for ThermoLM JAX
+Utils module for ThermoLM JAX.
 
-Contains utility functions for graph operations, energy functions, and JAX operations.
+Validated: PRNG-key helpers and seed management. (Legacy graph/energy/profiling
+utilities were unused by the validated core and live under experimental/.)
 """
 
-from .graph import color_graph
 from .reproducibility import set_seed, get_rng_key, split_rng_key, fork_rng_key
 
 __all__ = [
-    "color_graph",
-    "get_rng_key",
     "set_seed",
+    "get_rng_key",
     "split_rng_key",
     "fork_rng_key",
 ]
