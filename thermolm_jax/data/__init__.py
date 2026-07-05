@@ -1,28 +1,12 @@
 """
-Data module for ThermoLM JAX
+Data module for ThermoLM JAX.
 
-Contains JAX-compatible data loaders and tokenizers.
+Validated: char-level tokenizer and windowing for the Tier-1 LM.
 """
 
-from .base_loader import BaseDataLoader
-from .wikitext_jax import WikiTextDatasetJAX, create_jax_dataloaders
-from .tokenizers import TokenizerManager
-from .preprocessing import (
-    pad_sequence,
-    truncate_sequence,
-    create_sliding_windows,
-    batch_sequences,
-    mask_sequence,
-)
+from .char_tokenizer import CharTokenizer, make_windows
 
 __all__ = [
-    "BaseDataLoader",
-    "WikiTextDatasetJAX",
-    "create_jax_dataloaders",
-    "TokenizerManager",
-    "pad_sequence",
-    "truncate_sequence",
-    "create_sliding_windows",
-    "batch_sequences",
-    "mask_sequence",
+    "CharTokenizer",
+    "make_windows",
 ]

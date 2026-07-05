@@ -78,9 +78,8 @@ class FactorWeightNetwork(nn.Module):
         self.token_embed = nn.Embed(self.vocab_size, self.hidden_size)
         self.time_embed = TimestepEmbedder(self.hidden_size)
         
-        # Simple MLP - individual layers (no Sequential to avoid dimension issues)
-        self.dense1 = nn.Dense(self.hidden_size)
-        self.dense2 = nn.Dense(self.hidden_size)
+        # MLP stack with configurable depth
+        self.mlp_layers = [nn.Dense(self.hidden_size) for _ in range(self.n_layers)]
         
         # Heads that project to factor weight space
         self.unary_head = nn.Dense(self.n_levels)
@@ -111,6 +110,10 @@ class FactorWeightNetwork(nn.Module):
         # Add timestep embedding
         t_emb = self.time_embed(t)  # (batch, hidden)
         h = h + t_emb[:, None, :]
+        
+        # MLP stack
+        for layer in self.mlp_layers:
+            h = nn.silu(layer(h))
         
         # Unary factor weights
         unary_weights = self.unary_head(h)  # (batch, seq, n_levels)

@@ -16,7 +16,6 @@ Exploratory track (NOT exposed here; see STATUS.md):
 
 from .models.quadratic_ebm import QuadraticEBM, QuadraticEBMConfig
 from .models.connectivity import generate_connectivity_pattern
-from .models.dtm import DTM, DTMConfig
 from .sampling.chromatic_gibbs import chromatic_gibbs_sample, greedy_coloring
 from .training.contrastive_divergence import (
     contrastive_divergence_loss,
@@ -37,8 +36,6 @@ __all__ = [
     "QuadraticEBM",
     "QuadraticEBMConfig",
     "generate_connectivity_pattern",
-    "DTM",
-    "DTMConfig",
     "chromatic_gibbs_sample",
     "greedy_coloring",
     "contrastive_divergence_loss",

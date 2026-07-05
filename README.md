@@ -3,13 +3,12 @@
 Energy-based models for thermodynamic (TSU-style) sampling, built on Extropic's
 [THRML](https://github.com/extropic-ai/thrml) library in JAX.
 
-> **Scope note.** This repository has a small, **validated** core (quadratic
-> Ising EBMs sampled and trained correctly, with a THRML-backed path) and a
-> larger **exploratory** energy-diffusion language-model track that is a research
-> sketch and **not** validated. This README leads with what works; see
-> [`STATUS.md`](STATUS.md) for an honest, specific accounting of both.
+> **Scope note.** This repository is intentionally small: only the validated
+> core is imported by the package by default. An older experimental track lives
+> under `experimental/` and is not imported. See [`STATUS.md`](STATUS.md) for a
+> plain, specific accounting.
 
-## Validated: DTM / quadratic-Ising
+## Validated: Quadratic-Ising EBM + chromatic Gibbs
 
 A quadratic Ising energy-based model
 
@@ -116,21 +115,22 @@ truth rather than just shapes:
 | [`sampling/chromatic_gibbs.py`](thermolm_jax/sampling/chromatic_gibbs.py) | Chromatic block Gibbs (+ colouring) |
 | [`models/thrml_quadratic.py`](thermolm_jax/models/thrml_quadratic.py) | THRML `IsingSamplingProgram` path |
 | [`training/contrastive_divergence.py`](thermolm_jax/training/contrastive_divergence.py) | CD loss/step |
-| [`models/dtm.py`](thermolm_jax/models/dtm.py) | DTM scaffold (single shared EBM — see limitations) |
 | [`scripts/dtm_ising_demo.py`](scripts/dtm_ising_demo.py) | End-to-end demo |
 
 ## Language model (Tier 1: chain-CRF discrete diffusion)
 
-A small but genuine language model built on the validated core. Text is modelled
-by **masked discrete diffusion whose reverse step is a linear-chain CRF** sampled
-on THRML:
+A small language model built on the validated core. Text is modelled by **masked
+discrete diffusion whose reverse step is a linear-chain CRF** sampled on THRML:
 
 - A denoising network (`models/factor_weight_network.py`) conditioned on `(x_t, t)`
   emits the reverse-step energy as unary + nearest-neighbour pairwise categorical
   potentials — a linear-chain CRF over the clean vocabulary.
-- The pairwise term is the EDLM-style "energy correction" that lets a reverse step
-  model joint token structure a factorised denoiser can't; a chain is the simplest
-  structure that is both **exactly trainable** and **TSU-samplable**.
+- The pairwise term captures joint token structure at each reverse step. Unlike
+  standard diffusion LMs that predict tokens independently (the "factorization
+  mismatch"), the chain-CRF uses **exact forward–backward inference** for both
+  training and generation. This is the key property that EDLM-style energy
+  corrections add to standard diffusion models — here it is exact, not
+  approximate.
 - **Training** is exact conditional ML of the chain CRF (`models/chain_crf.py`,
   forward algorithm for `log Z` — no MCMC).
 - **Generation** samples the chain CRF jointly at each reverse step, either exactly
@@ -143,42 +143,111 @@ python scripts/train_charlm.py --sanity --out runs/charlm.pkl
 python scripts/generate_charlm.py --ckpt runs/charlm.pkl --n 8          # exact FFBS
 python scripts/generate_charlm.py --ckpt runs/charlm.pkl --n 4 --thrml  # TSU path
 
-# full char-level run (download TinyShakespeare to data/tinyshakespeare.txt)
-python scripts/train_charlm.py --data data/tinyshakespeare.txt --iters 3000 \
-    --seq_len 128 --hidden 256 --out runs/charlm.pkl
+# full TinyShakespeare training (auto-downloads dataset)
+python scripts/train_tinyshakespeare.py --iters 3000 --seq_len 128 --hidden 256 \
+    --out runs/charlm_tinyshakespeare.pkl
+python scripts/eval_charlm.py --ckpt runs/charlm_tinyshakespeare.pkl
+
+# distributed WikiText-2 training on 2×A100 (see RunPod section below)
+python scripts/train_distributed.py --dataset wikitext2 --gpu \
+    --iters 20000 --seq_len 256 --hidden 512 --layers 6 --batch 256 \
+    --out runs/charlm_wikitext2.pkl
 ```
 
-The CPU sanity run reaches ~1.0 bits/char vs a 3.9 unigram baseline and generates
-text from the corpus fragments. Full TinyShakespeare training is a short
-single-GPU/RunPod job (see `STATUS.md`); larger vocab/corpus and full
-contrastive-divergence energy training are the planned next tiers.
+The CPU sanity run trains on a small embedded corpus and generates corpus-like text.
+Full TinyShakespeare training is a short single-GPU job. WikiText-2 distributed
+training targets semi-coherent generation on a real corpus. See `STATUS.md` for
+expected GPU hours and scaling limits.
 
-## Exploratory (not validated)
+## Architecture notes: why chain-CRF for character-level LM
 
-The discrete / hybrid **energy-diffusion language-model** components
-(`models/{discrete_edlm, discrete_energy, d3pm, fsq, thrml_discrete, hybrid_*}`,
-`models/sampler.py`, the EDLM trainers, and the scripts under `experimental/`)
-are research sketches with known correctness problems documented in
-[`STATUS.md`](STATUS.md). They are not imported by the package by default and
-their legacy tests live under `tests/experimental/` (excluded from `pytest`).
-Import them by path if you want to experiment.
+The chain-CRF architecture makes a specific trade-off: it uses **exact joint
+inference** over the sequence (via the forward algorithm), which captures
+pairwise dependencies between adjacent tokens, but limits the inference to a
+chain structure to keep it tractable. This is well-suited for character-level
+language modeling because:
 
-## Background
+- **Small vocabulary** (V~65–100 for char-level) makes the O(L·V²) forward
+  algorithm cheap — ~500k ops per sequence for L=128, V=65.
+- **Exact inference** means no MCMC approximation or sampling error in training.
+- **Pairwise dependencies** are the minimal structure needed to capture n-gram
+  and local morphological patterns in text.
+- **The THRML path** maps the chain CRF onto thermodynamic hardware via
+  chromatic 2-colouring, validated against exact JAX inference.
 
-**Energy-based models** define `p(x) = exp(-E(x)) / Z`; sampling means finding
-low-energy configurations. **Thermodynamic sampling** (Extropic's TSU) performs
-block Gibbs updates physically, which requires energies that factor into local
-terms over a sparse graph — exactly the quadratic Ising form above. **Chromatic
-Gibbs** colours that graph so conditionally-independent variables update in
-parallel.
+The limitation is explicit: for large subword vocabularies (V~10k), the exact
+forward algorithm becomes prohibitive. Scaling to BPE-level models would require
+approximate inference (e.g., factorised output, or an EDLM-style energy
+correction on top of a tractable base distribution). This is a known and stated
+architectural boundary, not a hidden gap.
+
+### Relationship to EDLM and related work
+
+Recent work (Xu et al., ICLR 2025; "Energy-Based Diffusion Language Models")
+proposes adding an energy-based correction to standard diffusion LMs to fix the
+"factorization mismatch" — the problem that standard diffusion models predict
+tokens independently at each denoising step, ignoring sequence-level correlations.
+
+**The chain-CRF already implements this correction exactly** for the small-vocab
+regime: the pairwise CRF potentials capture the joint token structure that EDLM
+adds via a residual energy term. The EDLM formulation would become relevant if we
+scale to larger vocabularies where exact CRF inference is intractable. For
+current character-level experiments, the chain-CRF is the principled way to do
+what EDLM approximates.
+
+## Training & evaluation pipeline
+
+### Scripts
+
+| Script | Purpose | Key args |
+|--------|---------|----------|
+| `scripts/train_tinyshakespeare.py` | Single-device training on TinyShakespeare | `--iters`, `--seq_len`, `--hidden`, `--batch`, `--gpu` |
+| `scripts/train_distributed.py` | Multi-GPU (`pmap`) training on WikiText-2 or custom text | `--dataset`, `--iters`, `--seq_len`, `--hidden`, `--layers`, `--batch`, `--gpu` |
+| `scripts/eval_charlm.py` | Evaluation: held-out bits/char + generation samples | `--ckpt`, `--val_text`, `--n_samples`, `--temperature` |
+| `scripts/generate_charlm.py` | Standalone generation from checkpoint | `--ckpt`, `--n`, `--thrml` |
+| `scripts/dtm_ising_demo.py` | Ising EBM demo (exact marginals + CD training) | — |
+
+### RunPod deployment (GPU training)
+
+The `runpod/` directory contains one-command deployment scripts:
+
+```bash
+# One-time setup
+bash runpod/setup.sh
+
+# TinyShakespeare single-GPU run
+bash runpod/train.sh
+
+# WikiText-2 distributed 2×A100 run
+bash runpod/train_distributed.sh
+```
+
+Both scripts set XLA GPU performance flags (`--xla_gpu_triton_gemm_any=True`,
+`--xla_gpu_enable_latency_hiding_scheduler=true`) and bfloat16 matmul
+precision for A100/H100 Tensor Cores.
 
 ## Limitations of the validated track (honest)
 
 - The DTM here uses a **single, time-independent** shared EBM; it does not learn
   a per-timestep sequence of EBMs, so the full noise→data chain over real data
   is not demonstrated. The validated demo is the single-EBM case.
-- The forward-coupling schedule `γ(t)` is a heuristic ramp, not derived from a
-  specific corruption kernel.
+- The forward-corruption schedule `q_xt` is a simple independent masking process,
+  not a derived corruption kernel with a learned schedule.
+- The chain-CRF exact forward algorithm is **O(L·V²)**. It is cheap for the small
+  character vocabularies used here (V~65–100), but scaling to large subword
+  vocabularies (V~10k) would require approximate inference or a different
+  architecture. This is a known and stated architectural boundary, not a hidden
+  gap.
+- The language model is a research demonstration, not a production system. No
+  checkpointing resume, no mixed-precision training beyond JAX's bfloat16
+  matmul, no gradient clipping or advanced optimisation.
+
+## Exploratory track (not validated)
+
+An older experimental track (FSQ, discrete/hybrid energy-diffusion LM, continuous
+autoencoder, etc.) lives under `experimental/` and is **not imported by the package
+by default**. It has known correctness issues documented in `STATUS.md`. Import
+by path if you want to experiment.
 
 ## Research & references
 
@@ -186,11 +255,12 @@ parallel.
   diffusion-like models*, Jelinčič et al. (arXiv:2510.23972).
 - THRML: https://github.com/extropic-ai/thrml (vendored, Apache-2.0).
 - Contrastive divergence: Hinton (2002); Du & Mordatch (2019/2021).
-- (Exploratory track) FSQ: Mentzer et al. (2023); masked diffusion: Sahoo et al.
-  (2024), Lou et al. (2023); NVIDIA EDLM: Xu et al. (2024).
-
-External reference repos (NVIDIA Energy-Diffusion-LLM, dtm-replication) are not
-bundled to keep the clone small; see the links above.
+- Masked diffusion: Sahoo et al. (2024), Lou et al. (2023).
+- EDLM: Xu et al., *Energy-Based Diffusion Language Models for Text Generation*,
+  ICLR 2025. The chain-CRF implements exact joint inference in the small-vocab
+  regime where EDLM adds approximate energy corrections.
+- Character-level transformers: Al-Rfou et al., *Character-Level Language Modeling
+  with Deeper Self-Attention*, AAAI 2019.
 
 ## License
 

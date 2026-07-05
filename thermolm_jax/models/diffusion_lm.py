@@ -26,9 +26,15 @@ import optax
 
 from .factor_weight_network import FactorWeightNetwork
 from .chain_crf import chain_log_likelihood, chain_sample
-from .d3pm import q_xt
 
 _LN2 = jnp.log(2.0)
+
+
+def q_xt(x: jnp.ndarray, move_chance: jnp.ndarray, mask_index: int, key: jax.random.PRNGKey) -> jnp.ndarray:
+    """Masked forward corruption: each position becomes mask_index with probability move_chance."""
+    move_indices = jax.random.uniform(key, x.shape) < move_chance
+    xt = jnp.where(move_indices, mask_index, x)
+    return xt
 
 
 @dataclass
