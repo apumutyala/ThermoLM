@@ -135,11 +135,17 @@ def generate(
     n_steps: int = 16,
     temperature: float = 1.0,
     use_thrml: bool = False,
+    thrml_warmup: int = 100,
 ):
     """Generate sequences by iterative unmasking with joint chain-CRF sampling.
 
     Starts from all-MASK and commits a growing fraction of positions each step,
     sampling the full chain CRF jointly so co-committed positions are coherent.
+
+    ``thrml_warmup`` is the block-Gibbs sweep budget per reverse step on the
+    THRML path (the exact FFBS path has no budget — it draws exact joint
+    samples). Lowering it trades sample fidelity for hardware time; the
+    exactness-anchored sweep-budget experiment quantifies this trade.
 
     Returns (n_samples, L) int32 token ids in [0, V).
     """
@@ -157,7 +163,9 @@ def generate(
 
         if use_thrml:
             from ..sampling.chain_mrf_thrml import sample_chain_thrml
-            x0_hat = sample_chain_thrml(unary, pairwise, k_samp, temperature=1.0)
+            x0_hat = sample_chain_thrml(
+                unary, pairwise, k_samp, n_warmup=thrml_warmup, temperature=1.0
+            )
         else:
             x0_hat = _ffbs_batch(unary, pairwise, k_samp)
 
