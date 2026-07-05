@@ -1,5 +1,5 @@
 <div align="center">
-  <img src="docs/_static/logo/logo.svg" alt="THRML Logo" width="150" style="margin-bottom: 10px;">
+  <img src="docs_site/brand/logo.svg" alt="THRML Logo" width="150" style="margin-bottom: 10px;">
 </div>
 
 <h1 align='center'>THRML</h1>
@@ -78,3 +78,7 @@ schedule = SamplingSchedule(n_warmup=100, n_samples=1000, steps_per_sample=2)
 
 samples = sample_states(k_samp, program, schedule, init_state, [], [Block(nodes)])
 ```
+
+## More Examples
+
+For a more extensive example, see the [dtm-replication](https://github.com/pschilliOrange/dtm-replication) repository which runs on THRML.
