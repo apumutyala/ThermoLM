@@ -25,10 +25,19 @@ that is:
   local field `f_i = Σ_j J_ij x_j + h_i`.
 - **Sampled via THRML** through the library's own `IsingSamplingProgram` (the
   TSU-compatible path), validated to agree with the JAX sampler and with exact
-  marginals.
+  marginals. The sampler (`THRMLIsingSampler`) separates static structure from
+  traced arrays, so it is **jit/grad-safe** and serves as the negative phase
+  inside compiled training steps.
 - **Trained by contrastive divergence** with the correct two-term gradient
   (`∇L = E_data[∇E] − E_model[∇E]`), real data in the positive phase, and
-  `stop_gradient` on negative samples.
+  `stop_gradient` on negative samples — with a pure-JAX or THRML negative
+  phase.
+- **Trained natively on THRML** by fully-visible maximum likelihood
+  ([`training/thrml_ml.py`](thermolm_jax/training/thrml_ml.py)): positive-phase
+  moments computed **exactly from the data** (THRML v0.1.3+ fully-visible
+  path — zero variance, no MCMC), negative phase sampled by
+  `IsingSamplingProgram`, and the Monte-Carlo gradient validated against the
+  exact enumerated two-term KL gradient to <0.05.
 
 **This is demonstrated, not asserted** — see [Validation](#validation).
 
@@ -61,6 +70,9 @@ Expected demo output (abridged):
     THRML <s_i>: ...  max|err| = 0.033
 [2] Contrastive-divergence training on a toy bimodal distribution (n=8)
     ...
+    fraction of samples exactly on a data mode: 0.68
+[3] THRML-native ML training: exact positive phase + THRML negative phase (n=8)
+    positive/negative moment gap: start 0.454 -> end 0.035
     fraction of samples exactly on a data mode: 0.68
 ```
 
@@ -96,15 +108,24 @@ samples, _ = chromatic_gibbs_sample(ebm, init.astype(jnp.float32), 300, key, col
 
 ### Validation
 
-`tests/unit/test_ising_correctness.py` (run with `pytest`) checks, against ground
-truth rather than just shapes:
+The suite (19 tests, run with `pytest`) checks against ground truth rather
+than just shapes:
 
 - chromatic Gibbs reproduces the **exact** enumerated Boltzmann marginals
   (first and second moments), for both the JAX and THRML sampling paths;
-- CD training drives model moments toward the data moments;
+- CD training drives model moments toward the data moments — including with
+  the **THRML negative phase under `jit`/`grad`** (the regression test for a
+  former `TracerArrayConversionError` that made THRML-backed training
+  impossible);
+- the THRML-native ML gradient matches the **exact enumerated two-term KL
+  gradient** (<0.05), and training recovers a teacher model's moments
+  (`tests/unit/test_thrml_ml.py`);
+- chain-CRF log-partition/likelihood/marginals/FFBS match brute-force
+  enumeration; the THRML chain sampler matches exact marginals
+  (`tests/unit/test_chain_crf.py`);
 - the energy is single-counted and diagonal-free; temperature scaling behaves;
-- the forward-coupling sign favours aligned states; connectivity patterns are
-  nested; the graph colouring is valid.
+  the forward-coupling THRML factor matches its energy; connectivity patterns
+  are nested; the graph colouring is valid.
 
 ### Key modules (validated track)
 
@@ -113,9 +134,10 @@ truth rather than just shapes:
 | [`models/quadratic_ebm.py`](thermolm_jax/models/quadratic_ebm.py) | Quadratic Ising energy `E(x)` |
 | [`models/connectivity.py`](thermolm_jax/models/connectivity.py) | Sparse connectivity patterns |
 | [`sampling/chromatic_gibbs.py`](thermolm_jax/sampling/chromatic_gibbs.py) | Chromatic block Gibbs (+ colouring) |
-| [`models/thrml_quadratic.py`](thermolm_jax/models/thrml_quadratic.py) | THRML `IsingSamplingProgram` path |
+| [`models/thrml_quadratic.py`](thermolm_jax/models/thrml_quadratic.py) | jit/grad-safe THRML sampler (`THRMLIsingSampler`) |
 | [`training/contrastive_divergence.py`](thermolm_jax/training/contrastive_divergence.py) | CD loss/step |
-| [`scripts/dtm_ising_demo.py`](scripts/dtm_ising_demo.py) | End-to-end demo |
+| [`training/thrml_ml.py`](thermolm_jax/training/thrml_ml.py) | THRML-native ML trainer (exact positive phase) |
+| [`scripts/dtm_ising_demo.py`](scripts/dtm_ising_demo.py) | End-to-end demo (3 parts) |
 
 ## Language model (Tier 1: chain-CRF discrete diffusion)
 
@@ -158,6 +180,32 @@ The CPU sanity run trains on a small embedded corpus and generates corpus-like t
 Full TinyShakespeare training is a short single-GPU job. WikiText-2 distributed
 training targets semi-coherent generation on a real corpus. See `STATUS.md` for
 expected GPU hours and scaling limits.
+
+**Start here:** [`examples/lm_on_thrml.ipynb`](examples/lm_on_thrml.ipynb) — a
+self-contained, CPU-runnable notebook (THRML-docs style) that builds the chain
+CRF as a THRML factor graph, measures block-Gibbs fidelity against the exact
+oracle as a function of sweep budget, trains the LM, and generates with both
+samplers side by side.
+
+### The exactness anchor (research instrument)
+
+Because the reverse step admits **exact inference**, every hardware-shaped
+approximation is measurable:
+[`scripts/exp_sweep_budget.py`](scripts/exp_sweep_budget.py) plots the TV
+distance between THRML block-Gibbs marginals and the exact forward–backward
+marginals as a function of the Gibbs sweep budget, with the exact-FFBS
+finite-sample noise floor — for random potentials or a trained checkpoint's
+actual reverse step (`--ckpt`). The scaling research programme built on this
+instrument is in [`docs/RESEARCH_ROADMAP.md`](docs/RESEARCH_ROADMAP.md).
+
+### Results
+
+| Run | Hardware | bits/char | Notes |
+|-----|----------|-----------|-------|
+| Embedded corpus (`--sanity`) | CPU | ~0.9–1.0 vs ~3.8 unigram | notebook + CI test |
+| TinyShakespeare (3k iters) | 1×A100 | *(pending GPU run)* | |
+| WikiText-2 char (20k iters) | 2×A100 | *(pending GPU run)* | |
+| Sweep-budget curves (trained ckpt) | 1×A100 | see `results/` | *(pending GPU run)* |
 
 ## Architecture notes: why chain-CRF for character-level LM
 
@@ -205,7 +253,8 @@ what EDLM approximates.
 | `scripts/train_distributed.py` | Multi-GPU (`pmap`) training on WikiText-2 or custom text | `--dataset`, `--iters`, `--seq_len`, `--hidden`, `--layers`, `--batch`, `--gpu` |
 | `scripts/eval_charlm.py` | Evaluation: held-out bits/char + generation samples | `--ckpt`, `--val_text`, `--n_samples`, `--temperature` |
 | `scripts/generate_charlm.py` | Standalone generation from checkpoint | `--ckpt`, `--n`, `--thrml` |
-| `scripts/dtm_ising_demo.py` | Ising EBM demo (exact marginals + CD training) | — |
+| `scripts/exp_sweep_budget.py` | Exactness-anchored fidelity-vs-sweeps experiment | `--random-potentials`, `--ckpt`, `--sweeps`, `--n-chains` |
+| `scripts/dtm_ising_demo.py` | Ising EBM demo (sampling + CD + THRML-native ML) | — |
 
 ### RunPod deployment (GPU training)
 
@@ -253,7 +302,10 @@ by path if you want to experiment.
 
 - Extropic DTM: *An efficient probabilistic hardware architecture for
   diffusion-like models*, Jelinčič et al. (arXiv:2510.23972).
-- THRML: https://github.com/extropic-ai/thrml (vendored, Apache-2.0).
+- THRML: https://github.com/extropic-ai/thrml — vendored at v0.1.3+
+  (upstream `bbbba9d`, Apache-2.0), which adds the fully-visible
+  `estimate_kl_grad` path this repo's native trainer uses. Official docs:
+  https://docs.thrml.ai.
 - Contrastive divergence: Hinton (2002); Du & Mordatch (2019/2021).
 - Masked diffusion: Sahoo et al. (2024), Lou et al. (2023).
 - EDLM: Xu et al., *Energy-Based Diffusion Language Models for Text Generation*,

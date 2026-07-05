@@ -4,6 +4,13 @@ ThermoLM is a small, validated codebase: a quadratic-Ising EBM and a chain-CRF
 discrete-diffusion language model. Everything else is under `experimental/` and
 is not imported by the package.
 
+**July 2026 update:** vendored THRML refreshed to v0.1.3+ (upstream `bbbba9d`);
+two confirmed defects fixed with regression tests (see "Fixed defects" below);
+THRML-native maximum-likelihood training added and validated against exact
+gradients; codebase audited line-by-line against Extropic's published
+[thrml-skill](https://github.com/extropic-ai/thrml-skill) conventions. Suite:
+**19 tests, all against ground truth.**
+
 ## ✅ Validated core
 
 ### Quadratic-Ising EBM + chromatic Gibbs
@@ -13,16 +20,45 @@ is not imported by the package.
 - **Sampled correctly** by chromatic block Gibbs (validated against exact
   Boltzmann marginals by brute-force enumeration, n≤6).
 - **Sampled via THRML** (`IsingSamplingProgram`) — the TSU-compatible path,
-  validated against the same exact marginals.
+  validated against the same exact marginals. `THRMLIsingSampler` separates
+  static structure (edges, nodes, colour blocks; built once) from traced
+  arrays (J/h/β gathered with jnp indexing), so the THRML path is
+  **jit/grad-safe** and usable inside compiled training steps.
 - **Trained by contrastive divergence** with the correct two-term gradient
-  (`∇L = E_data[∇E] − E_model[∇E]`), `stop_gradient` on negatives.
+  (`∇L = E_data[∇E] − E_model[∇E]`), `stop_gradient` on negatives — pure-JAX
+  or THRML negative phase.
+- **Trained natively on THRML** by fully-visible maximum likelihood
+  (`training/thrml_ml.py`): exact positive-phase moments from the data
+  (v0.1.3 fully-visible `estimate_kl_grad`), THRML-sampled negative phase.
+  The Monte-Carlo gradient matches the exact enumerated two-term KL gradient
+  to <0.05, and training recovers a teacher model's exact moments
+  (`tests/unit/test_thrml_ml.py`).
 
-Evidence: `scripts/dtm_ising_demo.py`, `tests/unit/test_ising_correctness.py`.
+Evidence: `scripts/dtm_ising_demo.py` (3 parts),
+`tests/unit/test_ising_correctness.py`, `tests/unit/test_thrml_ml.py`.
 
 **Limitations:**
 - Single, time-independent shared EBM; no per-timestep DTM chain over real data.
 - Forward-coupling schedule γ(t) is a heuristic ramp, not derived from a known
   corruption kernel.
+- CD/ML negative phases are short block-Gibbs chains: strongly-coupled
+  (low-temperature) models mix slowly — the standard Gibbs caveat, now also
+  stated in THRML's own docs. The sweep-budget experiment quantifies this.
+
+### Fixed defects (July 2026, each with a regression test)
+
+- **A1** — the old THRML wrapper converted the traced coupling matrix to
+  NumPy inside the autodiff trace (`TracerArrayConversionError`), so
+  THRML-backed *training* had never actually been possible. Fixed by the
+  static-structure/traced-array split in `THRMLIsingSampler`.
+- **A2** — `ForwardCoupling.to_thrml_factor_at_t` passed an (n,n) eye-matrix
+  where a two-block `SpinEBMFactor` requires elementwise (n,) weights
+  (THRML rejects the shape). Fixed; the factor now provably matches the
+  coupling energy.
+- Smaller: eval batching conflated seq_len with batch size; `set_seed`
+  globally enabled float64; stale docstrings; dead WikiText-2 mirror;
+  invalid even/odd colouring helper removed ("bipartite" patterns renamed
+  "banded" — they are not bipartite for G12+).
 
 ### Tier-1 chain-CRF language model
 
@@ -43,6 +79,18 @@ beats the unigram baseline; `tests/unit/test_diffusion_lm.py` asserts learning +
 valid generation; `scripts/generate_charlm.py` runs both exact and THRML samplers;
 `scripts/train_distributed.py` supports multi-GPU WikiText-2 training with CPU
 fallback validated.
+
+**Research assets (July 2026):**
+- `examples/lm_on_thrml.ipynb` — self-contained CPU notebook (THRML docs
+  style, upstream-contributable): chain CRF as a THRML factor graph, fidelity
+  vs sweep budget against the exact oracle, LM training, dual-path generation.
+- `scripts/exp_sweep_budget.py` — the exactness anchor: TV distance between
+  THRML block-Gibbs marginals and exact forward–backward marginals vs sweep
+  budget, with the exact-FFBS noise floor; random potentials or a trained
+  checkpoint's reverse step. `generate(..., thrml_warmup=k)` exposes the
+  budget at generation time.
+- `docs/RESEARCH_ROADMAP.md` — the three-aim scaling programme (budget curves,
+  banded graphs beyond exact inference, latent-spin corrections).
 
 **Limitations:**
 - The chain-CRF exact forward algorithm is **O(L·V²)**. It is efficient for the
