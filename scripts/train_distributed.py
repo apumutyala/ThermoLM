@@ -53,7 +53,11 @@ from thermolm_jax.models.diffusion_lm import (
 _TINY_SHAKESPEARE_URL = (
     "https://raw.githubusercontent.com/karpathy/char-rnn/master/data/tinyshakespeare/input.txt"
 )
-_WIKITEXT2_RAW_URL = "https://s3.amazonaws.com/research.metamind.io/wikitext/wikitext-2-raw-v1.zip"
+# Mirrors tried in order; the original research.metamind.io S3 bucket is dead.
+_WIKITEXT2_RAW_URLS = [
+    "https://wikitext.smerity.com/wikitext-2-raw-v1.zip",
+    "https://s3.amazonaws.com/research.metamind.io/wikitext/wikitext-2-raw-v1.zip",
+]
 
 
 def download_tinyshakespeare(path: str = "data/tinyshakespeare.txt") -> str:
@@ -82,18 +86,39 @@ def ensure_wikitext2_raw(data_dir: str = "data/wikitext-2-raw") -> tuple[str, st
     os.makedirs(data_dir, exist_ok=True)
     zip_path = os.path.join(data_dir, "wikitext-2-raw-v1.zip")
     if not os.path.exists(zip_path):
-        print(f"[data] downloading WikiText-2 raw -> {zip_path}")
-        urllib.request.urlretrieve(_WIKITEXT2_RAW_URL, zip_path)
+        for url in _WIKITEXT2_RAW_URLS:
+            try:
+                print(f"[data] downloading WikiText-2 raw from {url}")
+                urllib.request.urlretrieve(url, zip_path)
+                break
+            except Exception as e:  # noqa: BLE001 - try the next mirror
+                print(f"[data] download failed ({e}); trying next source")
 
-    print(f"[data] extracting WikiText-2 raw -> {data_dir}")
-    with zipfile.ZipFile(zip_path, "r") as zf:
-        zf.extractall(data_dir)
+    if os.path.exists(zip_path):
+        print(f"[data] extracting WikiText-2 raw -> {data_dir}")
+        with zipfile.ZipFile(zip_path, "r") as zf:
+            zf.extractall(data_dir)
 
-    if all(os.path.exists(p) for p in (nested_train, nested_valid, nested_test)):
-        return nested_train, nested_valid, nested_test
-    if all(os.path.exists(p) for p in (direct_train, direct_valid, direct_test)):
-        return direct_train, direct_valid, direct_test
-    raise FileNotFoundError(f"Could not find WikiText-2 raw files under {data_dir}")
+        if all(os.path.exists(p) for p in (nested_train, nested_valid, nested_test)):
+            return nested_train, nested_valid, nested_test
+        if all(os.path.exists(p) for p in (direct_train, direct_valid, direct_test)):
+            return direct_train, direct_valid, direct_test
+
+    # Last resort: rebuild the raw files via the HuggingFace `datasets` hub.
+    print("[data] zip mirrors unavailable; falling back to the `datasets` package")
+    try:
+        from datasets import load_dataset
+    except ImportError as e:
+        raise FileNotFoundError(
+            f"Could not download WikiText-2 raw under {data_dir}. Install the "
+            "fallback loader with `pip install datasets` and retry."
+        ) from e
+    for split, fname in [("train", direct_train), ("validation", direct_valid), ("test", direct_test)]:
+        ds = load_dataset("wikitext", "wikitext-2-raw-v1", split=split)
+        with open(fname, "w", encoding="utf-8") as f:
+            f.write("".join(ds["text"]))
+        print(f"[data] wrote {fname}")
+    return direct_train, direct_valid, direct_test
 
 
 def read_text(path: str) -> str:

@@ -155,35 +155,15 @@ class ForwardCoupling(eqx.Module):
         nodes_t: List,
         nodes_t_minus_1: List
     ):
+        """Not directly convertible: gamma is a schedule over t.
+
+        Use :meth:`to_thrml_factor_at_t` with a specific timestep instead.
         """
-        Convert forward coupling to THRML SpinEBMFactor.
-        
-        Mathematical Note:
-        - Forward coupling: E_f = Γ(t)/2 Σ_i x_i^{(t)} x_i^{(t-1)}
-        - SpinEBMFactor with two blocks computes: -Σ_{i,j} weights[i,j] * A[i] * B[j]
-        - With diagonal weights: -Σ_i weights[i,i] * A[i] * B[i]
-        - This gives: -Σ_i (γ/2) * x_i^{(t)} * x_i^{(t-1)} ✅
-        
-        Args:
-            nodes_t: Nodes at timestep t
-            nodes_t_minus_1: Nodes at timestep t-1
-        
-        Returns:
-            SpinEBMFactor for timestep t (requires THRML import)
-        """
-        from thrml.models.discrete_ebm import SpinEBMFactor
-        from thrml.block_management import Block
-        
-        # This method requires a specific timestep t to get gamma_t
-        # Since gamma is a schedule, we need to call this for each timestep
-        # For now, this is a placeholder showing the structure
-        # In practice, you would call this with a specific t
-        
         raise NotImplementedError(
             "to_thrml_factor requires a specific timestep t. "
             "Use to_thrml_factor_at_t(t, nodes_t, nodes_t_minus_1) instead."
         )
-    
+
     def to_thrml_factor_at_t(
         self,
         t: int,
@@ -191,38 +171,33 @@ class ForwardCoupling(eqx.Module):
         nodes_t_minus_1: List
     ):
         """
-        Convert forward coupling at timestep t to THRML SpinEBMFactor.
-        
+        Convert forward coupling at timestep t to a THRML SpinEBMFactor.
+
         Mathematical Note:
-        - Forward coupling: E_f = Γ(t)/2 Σ_i x_i^{(t)} x_i^{(t-1)}
-        - SpinEBMFactor with two blocks computes: -Σ_{i,j} weights[i,j] * A[i] * B[j]
-        - With diagonal weights: -Σ_i weights[i,i] * A[i] * B[i]
-        - This gives: -Σ_i (γ/2) * x_i^{(t)} * x_i^{(t-1)} ✅
-        
+        - Forward coupling energy: E_f = -(Γ(t)/2) Σ_i x_i^{(t)} x_i^{(t-1)}
+        - A two-block ``SpinEBMFactor([Block(A), Block(B)], w)`` pairs the
+          blocks ELEMENTWISE: its energy is ``-Σ_i w_i A_i B_i`` with one
+          weight per pair, so ``w`` has shape (n,) — NOT an (n, n) matrix.
+          (An earlier version passed ``eye(n) * γ/2``, which THRML rejects:
+          the weight tensor for a spin-only factor must be 1-D.)
+        - With w_i = Γ(t)/2 this gives exactly -Σ_i (γ_t/2) x_i^{(t)} x_i^{(t-1)},
+          matching ``__call__``'s ferromagnetic sign.
+
         Args:
             t: Timestep index
             nodes_t: Nodes at timestep t
-            nodes_t_minus_1: Nodes at timestep t-1
-        
+            nodes_t_minus_1: Nodes at timestep t-1 (same length as nodes_t)
+
         Returns:
             SpinEBMFactor for timestep t
         """
-        from thrml.models.discrete_ebm import SpinEBMFactor
-        from thrml.block_management import Block
-        
+        from thrml import Block
+        from thrml.models import SpinEBMFactor
+
         gamma_t = self.gamma[t]
         n_vars = len(nodes_t)
-        
-        # Create diagonal weight matrix
-        # weights[i, j] = gamma_t/2 if i == j else 0
-        weights = jnp.eye(n_vars) * (gamma_t / 2.0)
-        
-        # SpinEBMFactor with two blocks:
-        # - node_groups[0] = Block(nodes_t) = [x_t_0, x_t_1, ..., x_t_{n-1}]
-        # - node_groups[1] = Block(nodes_t_minus_1) = [x_{t-1}_0, x_{t-1}_1, ..., x_{t-1}_{n-1}]
-        # - weights shape = [n_vars, n_vars]
-        # Energy = -Σ_{i,j} weights[i,j] * nodes_t[i] * nodes_t_minus_1[j]
-        # With diagonal weights: -Σ_i (γ/2) * x_t_i * x_{t-1}_i ✅
+
+        weights = jnp.full((n_vars,), gamma_t / 2.0)
         return SpinEBMFactor(
             node_groups=[Block(nodes_t), Block(nodes_t_minus_1)],
             weights=weights

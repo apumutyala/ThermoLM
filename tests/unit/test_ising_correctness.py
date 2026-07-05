@@ -176,3 +176,74 @@ def test_greedy_coloring_is_valid():
     colors = greedy_coloring(jnp.asarray(mask))
     i, j = np.nonzero(np.triu(mask, 1))
     assert np.all(colors[i] != colors[j])
+
+
+def test_cd_with_thrml_negative_phase_trains():
+    """CD with a THRML negative phase must run under jit/grad (A1 regression).
+
+    An earlier THRML wrapper converted the traced coupling matrix to NumPy to
+    build the edge list, so any training step with ``use_thrml=True`` raised
+    ``TracerArrayConversionError``. The setup-once ``THRMLIsingSampler`` keeps
+    the edge structure static and gathers weights with jnp indexing; this test
+    locks in that the jit-compiled CD step runs and learns.
+    """
+    from thermolm_jax.models.thrml_quadratic import THRMLIsingSampler
+
+    n = 6
+    key = jax.random.PRNGKey(30)
+    teacher = _chain_ebm(n=n, init_scale=0.8, seed=7)
+    states = np.array(list(itertools.product([-1.0, 1.0], repeat=n)))
+    E = np.asarray(teacher(jnp.asarray(states)))
+    w = np.exp(-(E - E.min())); w /= w.sum()
+    data_mag, _ = _exact_moments(teacher, n)
+
+    student = QuadraticEBM(QuadraticEBMConfig(n_vars=n, beta=1.0, init_scale=0.01), key)
+    student = student.set_connectivity(teacher.connectivity_mask)
+    sampler = THRMLIsingSampler(np.asarray(student.connectivity_mask))
+
+    opt = optax.adam(0.05)
+    opt_state = opt.init(eqx.filter(student, eqx.is_inexact_array))
+    cfg = CDConfig(k=1, n_gibbs_steps=15, temperature=1.0, use_thrml=True)
+
+    losses = []
+    for step in range(60):
+        key, kb, kc = jax.random.split(key, 3)
+        idx = np.asarray(jax.random.choice(kb, len(states), shape=(128,), p=jnp.asarray(w)))
+        student, opt_state, loss, _ = contrastive_divergence_step(
+            student, opt, opt_state, jnp.asarray(states[idx]), kc, cfg,
+            thrml_sampler=sampler,
+        )
+        losses.append(float(loss))
+    assert np.all(np.isfinite(losses))
+
+    # Model magnetisations should move toward the data magnetisations.
+    key, ks = jax.random.split(key)
+    init = jax.random.randint(ks, (4000, n), 0, 2) * 2 - 1
+    samp, _ = sampler.sample(
+        student.J, student.h, student.beta, init.astype(jnp.float32), ks, 200
+    )
+    model_mag = np.asarray(samp).mean(0)
+    assert np.abs(model_mag - data_mag).max() < 0.25
+
+
+def test_forward_coupling_thrml_factor_matches_energy():
+    """The THRML factor form of the forward coupling matches __call__ (A2).
+
+    A two-block SpinEBMFactor pairs blocks elementwise with weights of shape
+    (n,); its energy is -sum_i w_i A_i B_i, which must equal the coupling
+    energy E_f = -(gamma_t/2) sum_i x_t_i x_{t-1}_i.
+    """
+    cfg = ForwardCouplingConfig(T=10, gamma_min=0.5, gamma_max=0.5)
+    fc = ForwardCoupling(cfg)
+    n = 4
+    from thrml import SpinNode
+
+    nodes_t = [SpinNode() for _ in range(n)]
+    nodes_tm1 = [SpinNode() for _ in range(n)]
+    factor = fc.to_thrml_factor_at_t(3, nodes_t, nodes_tm1)
+    assert factor.weights.shape == (n,)
+
+    x_t = jnp.asarray([[1.0, -1.0, 1.0, 1.0]])
+    x_tm1 = jnp.asarray([[1.0, 1.0, -1.0, 1.0]])
+    manual = -jnp.sum(factor.weights * x_t * x_tm1, axis=-1)
+    assert np.allclose(np.asarray(fc(x_t, x_tm1, t=3)), np.asarray(manual), atol=1e-5)

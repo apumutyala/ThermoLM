@@ -1,43 +1,60 @@
 """
-ThermoLM JAX
+ThermoLM JAX — energy-based models on (simulated) thermodynamic hardware.
 
-Validated track (this is what the package exposes by default):
-  Quadratic Ising energy-based models sampled with chromatic block Gibbs and
-  trained by contrastive divergence, with a THRML-backed sampling path. See the
-  README "Validated: DTM / quadratic-Ising" section.
+Validated track (what this package exposes):
+  - Quadratic Ising EBMs sampled with chromatic block Gibbs, trained by
+    contrastive divergence or THRML-native maximum likelihood (exact
+    positive phase), with a jit/grad-safe THRML sampling path.
+  - A chain-CRF discrete-diffusion language model with exact inference
+    (forward-backward, FFBS) whose reverse step also runs on THRML.
+  See README.md and STATUS.md for the validation evidence and scope.
 
-Exploratory track (NOT exposed here; see STATUS.md):
-  The discrete/hybrid energy-diffusion language-model components under
-  ``thermolm_jax.models`` (FSQ, discrete_energy, d3pm, discrete_edlm,
-  hybrid_*) and the corresponding trainers are unvalidated research sketches.
-  Import them explicitly if you want to experiment, e.g.
-  ``from thermolm_jax.models.discrete_edlm import DiscreteEDLM``.
+Exploratory track: legacy research sketches live under the repo-level
+``experimental/`` directory (NOT importable from this package); see
+STATUS.md for their known defects.
 """
 
 from .models.quadratic_ebm import QuadraticEBM, QuadraticEBMConfig
 from .models.connectivity import generate_connectivity_pattern
-from .sampling.chromatic_gibbs import chromatic_gibbs_sample, greedy_coloring
+from .models.thrml_quadratic import THRMLIsingSampler
+from .models.chain_crf import (
+    chain_log_partition,
+    chain_log_likelihood,
+    chain_marginals,
+    chain_sample,
+)
+from .models.diffusion_lm import DiffusionLMConfig, fit, generate
+from .data.char_tokenizer import CharTokenizer, make_windows
+from .sampling.chromatic_gibbs import (
+    chromatic_gibbs_sample,
+    greedy_coloring,
+    color_masks_from_colors,
+)
 from .training.contrastive_divergence import (
     contrastive_divergence_loss,
     contrastive_divergence_step,
     CDConfig,
 )
 
-# THRML availability (used by the THRML sampling path).
-try:
-    import thrml  # noqa: F401
-    _has_thrml = True
-except ImportError:
-    _has_thrml = False
-
-__version__ = "0.1.0"
+__version__ = "0.2.0"
 
 __all__ = [
     "QuadraticEBM",
     "QuadraticEBMConfig",
+    "THRMLIsingSampler",
     "generate_connectivity_pattern",
+    "chain_log_partition",
+    "chain_log_likelihood",
+    "chain_marginals",
+    "chain_sample",
+    "DiffusionLMConfig",
+    "fit",
+    "generate",
+    "CharTokenizer",
+    "make_windows",
     "chromatic_gibbs_sample",
     "greedy_coloring",
+    "color_masks_from_colors",
     "contrastive_divergence_loss",
     "contrastive_divergence_step",
     "CDConfig",

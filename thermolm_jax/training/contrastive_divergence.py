@@ -54,6 +54,7 @@ def contrastive_divergence_loss(
     config: CDConfig,
     energy_fn: Optional[Callable] = None,
     color_masks: Optional[jnp.ndarray] = None,
+    thrml_sampler=None,
 ) -> Tuple[jnp.ndarray, dict]:
     """Contrastive-divergence surrogate loss and metrics.
 
@@ -68,6 +69,9 @@ def contrastive_divergence_loss(
         color_masks: Optional precomputed chromatic colour masks (keeps the
             negative-phase sampler ``jit``-able); see
             ``thermolm_jax.sampling.chromatic_gibbs.color_masks_from_colors``.
+        thrml_sampler: Prebuilt ``THRMLIsingSampler`` for the negative phase
+            when ``config.use_thrml`` — required under ``jit``/``grad`` so the
+            THRML edge structure is static while ``J``/``h`` stay traced.
 
     Returns:
         (loss, info)
@@ -87,6 +91,7 @@ def contrastive_divergence_loss(
             temperature=config.temperature,
             use_thrml=config.use_thrml,
             color_masks=color_masks,
+            thrml_sampler=thrml_sampler,
         )
     # Treat negative samples as fixed: gives the correct two-term CD gradient.
     x_neg = jax.lax.stop_gradient(x_neg)
@@ -114,17 +119,21 @@ import equinox as eqx
 
 
 @eqx.filter_jit
-def _cd_update(model, opt_state, x_data, key, optimizer, config, color_masks):
+def _cd_update(model, opt_state, x_data, key, optimizer, config, color_masks, thrml_sampler):
     """jit-compiled CD value/grad + optimiser update.
 
-    ``optimizer`` and ``config`` are static (non-array) and so are baked into the
-    compiled function; ``color_masks`` is a fixed-shape array threaded in so the
-    negative-phase sampler compiles (no in-trace graph colouring).
+    ``optimizer``, ``config``, and ``thrml_sampler`` are static (non-array) and
+    so are baked into the compiled function; ``color_masks`` is a fixed-shape
+    array threaded in so the negative-phase sampler compiles (no in-trace graph
+    colouring). ``thrml_sampler`` holds only Python/NumPy structure (nodes,
+    edges, blocks), so treating it as static is exactly right — reuse ONE
+    instance across steps or every call retraces.
     """
 
     def loss_fn(m):
         return contrastive_divergence_loss(
-            m, x_data, key, config, energy_fn=m, color_masks=color_masks
+            m, x_data, key, config, energy_fn=m,
+            color_masks=color_masks, thrml_sampler=thrml_sampler,
         )
 
     (loss, info), grads = eqx.filter_value_and_grad(loss_fn, has_aux=True)(model)
@@ -142,25 +151,33 @@ def contrastive_divergence_step(
     config: CDConfig,
     energy_fn: Optional[Callable] = None,
     color_masks: Optional[jnp.ndarray] = None,
+    thrml_sampler=None,
 ) -> Tuple:
     """One CD optimisation step (Equinox model + Optax).
 
     For the quadratic Ising model, pass ``color_masks`` (from
-    ``color_masks_from_colors``) to use the fast jit-compiled path. The
+    ``color_masks_from_colors``) — or, with ``config.use_thrml``, a prebuilt
+    ``THRMLIsingSampler`` — to use the fast jit-compiled path. The
     ``energy_fn`` argument is accepted for API symmetry but the jit path always
     uses ``model`` as its own energy (so gradients flow to its parameters).
 
     Returns (model, opt_state, loss, info).
     """
-    if color_masks is not None and (energy_fn is None or energy_fn is model):
-        return _cd_update(model, opt_state, x_data, key, optimizer, config, color_masks)
+    has_static_sampler = color_masks is not None or (
+        config.use_thrml and thrml_sampler is not None
+    )
+    if has_static_sampler and (energy_fn is None or energy_fn is model):
+        return _cd_update(
+            model, opt_state, x_data, key, optimizer, config, color_masks, thrml_sampler
+        )
 
-    # Eager fallback (generic energy_fn, or no colour masks supplied).
+    # Eager fallback (generic energy_fn, or no static sampler structure supplied).
     def loss_fn(m):
         return contrastive_divergence_loss(
             m, x_data, key, config,
             energy_fn=m if energy_fn is None else energy_fn,
             color_masks=color_masks,
+            thrml_sampler=thrml_sampler,
         )
 
     (loss, info), grads = eqx.filter_value_and_grad(loss_fn, has_aux=True)(model)

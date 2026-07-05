@@ -17,22 +17,19 @@ from typing import Optional
 
 def set_seed(seed: int):
     """
-    Set random seed for all libraries.
-    
-    Design Decision: Strict random seed control
-    - Rationale: Exact reproducibility
-    - Impact: Same seed = same results
-    - Trade-off: Less randomness in exploration
-    - Downstream: Debugging easier
-    
+    Set the random seed for the stdlib and NumPy RNGs.
+
+    JAX randomness is explicit via PRNG keys (see ``get_rng_key``); there is
+    no global JAX seed. NOTE: an earlier version also enabled
+    ``jax_enable_x64`` here — a global precision change (float32 -> float64
+    everywhere) unrelated to seeding that silently degrades GPU throughput.
+    Removed; enable x64 explicitly at the call site if you actually need it.
+
     Args:
         seed: Random seed
     """
     random.seed(seed)
     np.random.seed(seed)
-    # JAX handles seeds differently via PRNGKey
-    # Set JAX to use deterministic operations where possible
-    jax.config.update("jax_enable_x64", True)
 
 
 def get_rng_key(seed: int) -> jax.random.PRNGKey:

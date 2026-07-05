@@ -18,7 +18,10 @@ between x_i = ±1; a previous version applied an *extra* ×2 to the full ΔE, i.
 sampled at half the requested temperature — that bug is fixed here.)
 
 A correct THRML-backed path is available via ``use_thrml=True`` for quadratic
-EBMs; it delegates to THRML's validated ``IsingSamplingProgram``.
+EBMs; it delegates to THRML's validated ``IsingSamplingProgram``. Inside
+``jit``/``grad`` (e.g. a training step), pass a prebuilt ``thrml_sampler``
+(``thermolm_jax.models.thrml_quadratic.THRMLIsingSampler``) so the edge
+structure is static and only arrays are traced.
 """
 
 import numpy as np
@@ -82,6 +85,7 @@ def chromatic_gibbs_sample(
     temperature: float = 1.0,
     use_thrml: bool = False,
     color_masks: Optional[jnp.ndarray] = None,
+    thrml_sampler=None,
 ) -> Tuple[jnp.ndarray, dict]:
     """Chromatic Gibbs sampling.
 
@@ -103,6 +107,11 @@ def chromatic_gibbs_sample(
             ``color_masks_from_colors``). Pass this to keep the quadratic
             sampler ``jit``-able (avoids running graph colouring in-trace). If
             omitted it is derived from the EBM's connectivity.
+        thrml_sampler: Optional prebuilt
+            ``thermolm_jax.models.thrml_quadratic.THRMLIsingSampler``. REQUIRED
+            for the THRML path inside ``jit``/``grad`` (the fallback builds the
+            edge structure from the concrete mask, which fails on tracers).
+            Build it once at setup and reuse it.
 
     Returns:
         (final_state, info)
@@ -110,13 +119,14 @@ def chromatic_gibbs_sample(
     is_quadratic = hasattr(energy_fn, "J") and hasattr(energy_fn, "h")
 
     if use_thrml and is_quadratic:
-        from thermolm_jax.models.thrml_quadratic import THRMLQuadraticEBM
+        if thrml_sampler is None:
+            # Eager-only fallback: derives structure from the concrete mask.
+            from thermolm_jax.models.thrml_quadratic import THRMLIsingSampler
 
-        wrapper = THRMLQuadraticEBM(
-            energy_fn.J, energy_fn.h, float(energy_fn.beta), energy_fn.connectivity_mask
+            thrml_sampler = THRMLIsingSampler(np.asarray(energy_fn.connectivity_mask))
+        return thrml_sampler.sample(
+            energy_fn.J, energy_fn.h, energy_fn.beta, init_state, key, n_steps, temperature
         )
-        colors = greedy_coloring(energy_fn.connectivity_mask)
-        return wrapper.sample(init_state, colors, n_steps, key, temperature)
 
     if is_quadratic:
         if color_masks is None:

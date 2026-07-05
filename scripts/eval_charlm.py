@@ -31,8 +31,14 @@ def load_checkpoint(path: str):
     return cfg, params, tok
 
 
-def evaluate_bits_per_char(params, net, cfg, tok, text_ids, key, n_batches: int = 10):
-    """Evaluate mean bits/char on a held-out text stream by sliding window."""
+def evaluate_bits_per_char(params, net, cfg, tok, text_ids, key,
+                           n_batches: int = 10, eval_batch: int = 64):
+    """Evaluate mean bits/char on a held-out text stream.
+
+    Cuts the stream into non-overlapping seq_len windows and scores up to
+    ``n_batches`` batches of ``eval_batch`` windows each. (An earlier version
+    conflated seq_len with the batch size when slicing.)
+    """
     ids = np.asarray(text_ids)
     L = cfg.seq_len
     # Non-overlapping windows for clean held-out evaluation
@@ -48,9 +54,10 @@ def evaluate_bits_per_char(params, net, cfg, tok, text_ids, key, n_batches: int 
     import jax.numpy as jnp
     windows_j = jnp.asarray(windows)
 
+    n_full_batches = (len(windows) + eval_batch - 1) // eval_batch
     bpc_vals = []
-    for b in range(min(n_batches, max(1, len(windows) // cfg.seq_len))):
-        batch = windows_j[b * cfg.seq_len : (b + 1) * cfg.seq_len]
+    for b in range(min(n_batches, n_full_batches)):
+        batch = windows_j[b * eval_batch : (b + 1) * eval_batch]
         if len(batch) == 0:
             break
         key, k = jax.random.split(key)
@@ -65,6 +72,7 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--ckpt", type=str, required=True, help="path to .pkl checkpoint")
     ap.add_argument("--val_text", type=str, default=None, help="optional held-out text file")
+    ap.add_argument("--eval_batch", type=int, default=64, help="windows per eval batch")
     ap.add_argument("--n_samples", type=int, default=8, help="number of generated samples")
     ap.add_argument("--n_steps", type=int, default=16, help="generation steps")
     ap.add_argument("--temperature", type=float, default=1.0)
@@ -85,7 +93,8 @@ def main():
         with open(args.val_text, "r", encoding="utf-8") as f:
             val_text = f.read()
         val_ids = tok.encode(val_text)
-        val_bpc = evaluate_bits_per_char(params, net, cfg, tok, val_ids, key)
+        val_bpc = evaluate_bits_per_char(params, net, cfg, tok, val_ids, key,
+                                         eval_batch=args.eval_batch)
         if val_bpc is not None:
             print(f"[eval] held-out bits/char ~ {val_bpc:.3f}")
     else:
