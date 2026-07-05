@@ -33,9 +33,8 @@ env/
 *.swo
 *~
 
-# Jupyter
+# Jupyter (checkpoints only; examples/*.ipynb ARE tracked)
 .ipynb_checkpoints/
-*.ipynb
 
 # Data
 data/raw/
