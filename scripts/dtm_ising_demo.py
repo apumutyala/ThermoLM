@@ -111,12 +111,46 @@ def part2_cd_training(key):
     print(f"    mean Hamming distance to nearest mode:       {float(dist.mean()):.2f}  (of {n} bits)")
 
 
+def part3_thrml_native_ml(key):
+    print("\n[3] THRML-native ML training: exact positive phase + THRML negative phase (n=8)")
+    from thermolm_jax.models.thrml_quadratic import THRMLIsingSampler
+    from thermolm_jax.training.thrml_ml import fit_ising_ml
+
+    n = 8
+    proto = np.array(
+        [[1, 1, 1, 1, -1, -1, -1, -1], [-1, -1, 1, 1, -1, -1, 1, 1]], dtype=float
+    )
+    key, kd, kf = jax.random.split(key, 3)
+    idx = np.asarray(jax.random.randint(kd, (2000,), 0, 2))
+    flips = np.asarray(jax.random.uniform(kd, (2000, n))) < 0.05
+    data = jnp.asarray(np.where(flips, -proto[idx], proto[idx]))
+
+    ebm = QuadraticEBM(QuadraticEBMConfig(n_vars=n, beta=1.0, init_scale=0.01), key)
+    ebm = ebm.set_connectivity(jnp.ones((n, n), bool))
+
+    ebm, sampler, history = fit_ising_ml(
+        ebm, data, kf, n_iters=100, batch_size=256, lr=0.05, n_chains_neg=256
+    )
+    print(f"    positive/negative moment gap: start {history[0]:.3f} -> end {history[-1]:.3f}")
+    print("    (positive moments are EXACT from data - v0.1.3 fully-visible path;")
+    print("     negative phase sampled by THRML's IsingSamplingProgram)")
+
+    key, ks = jax.random.split(key)
+    init = jax.random.randint(ks, (1000, n), 0, 2) * 2 - 1
+    samp, _ = sampler.sample(ebm.J, ebm.h, ebm.beta, init.astype(jnp.float32), ks, 400)
+    samp = np.asarray(samp)
+    dist = np.minimum((samp != proto[0]).sum(1), (samp != proto[1]).sum(1))
+    print(f"    fraction of samples exactly on a data mode: {float((dist == 0).mean()):.2f}")
+    print(f"    mean Hamming distance to nearest mode:       {float(dist.mean()):.2f}  (of {n} bits)")
+
+
 def main():
     argparse.ArgumentParser(description=__doc__).parse_args()
     key = jax.random.PRNGKey(0)
     part1_sampler_correctness(key)
     part2_cd_training(jax.random.PRNGKey(1))
-    print("\nDone. Both the sampler-correctness check and CD training ran on CPU.")
+    part3_thrml_native_ml(jax.random.PRNGKey(2))
+    print("\nDone. Sampler correctness, CD training, and THRML-native ML training all ran on CPU.")
 
 
 if __name__ == "__main__":
