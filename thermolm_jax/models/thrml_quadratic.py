@@ -72,8 +72,15 @@ class THRMLIsingSampler:
             (self.nodes[i], self.nodes[j]) for i, j in zip(ei.tolist(), ej.tolist())
         ]
 
-        self.n_colors = int(colors.max()) + 1 if n > 0 else 0
-        self.block_indices = [np.nonzero(colors == c)[0] for c in range(self.n_colors)]
+        # One free block per non-empty colour class. Empty classes (possible
+        # with a gapped user-supplied colouring) are dropped: THRML's
+        # BlockSpec rejects empty blocks.
+        n_colors = int(colors.max()) + 1 if n > 0 else 0
+        self.block_indices = [
+            idx for idx in (np.nonzero(colors == c)[0] for c in range(n_colors))
+            if len(idx) > 0
+        ]
+        self.n_colors = len(self.block_indices)
         self.free_blocks = [
             Block([self.nodes[int(i)] for i in idx]) for idx in self.block_indices
         ]

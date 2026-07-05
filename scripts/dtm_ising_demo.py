@@ -78,9 +78,10 @@ def part2_cd_training(key):
     )
 
     def make_batch(k, B=128, flip=0.05):
-        idx = np.asarray(jax.random.randint(k, (B,), 0, 2))
+        k_idx, k_noise = jax.random.split(k)
+        idx = np.asarray(jax.random.randint(k_idx, (B,), 0, 2))
         x = proto[idx]
-        noise = np.asarray(jax.random.uniform(k, (B, n))) < flip
+        noise = np.asarray(jax.random.uniform(k_noise, (B, n))) < flip
         return jnp.asarray(np.where(noise, -x, x))
 
     ebm = QuadraticEBM(QuadraticEBMConfig(n_vars=n, beta=1.0, init_scale=0.01), key)
@@ -120,9 +121,9 @@ def part3_thrml_native_ml(key):
     proto = np.array(
         [[1, 1, 1, 1, -1, -1, -1, -1], [-1, -1, 1, 1, -1, -1, 1, 1]], dtype=float
     )
-    key, kd, kf = jax.random.split(key, 3)
-    idx = np.asarray(jax.random.randint(kd, (2000,), 0, 2))
-    flips = np.asarray(jax.random.uniform(kd, (2000, n))) < 0.05
+    key, k_idx, k_flip, kf = jax.random.split(key, 4)
+    idx = np.asarray(jax.random.randint(k_idx, (2000,), 0, 2))
+    flips = np.asarray(jax.random.uniform(k_flip, (2000, n))) < 0.05
     data = jnp.asarray(np.where(flips, -proto[idx], proto[idx]))
 
     ebm = QuadraticEBM(QuadraticEBMConfig(n_vars=n, beta=1.0, init_scale=0.01), key)

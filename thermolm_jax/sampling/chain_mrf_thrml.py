@@ -48,7 +48,10 @@ def _build_chain_program(unary, pairwise, n_levels, temperature):
 
     even_idx = list(range(0, L, 2))
     odd_idx = list(range(1, L, 2))
-    free_blocks = [Block([nodes[i] for i in even_idx]), Block([nodes[i] for i in odd_idx])]
+    # Drop the odd block when L == 1 — THRML's BlockSpec rejects empty blocks.
+    free_blocks = [Block([nodes[i] for i in even_idx])]
+    if odd_idx:
+        free_blocks.append(Block([nodes[i] for i in odd_idx]))
 
     node_sds = {CategoricalNode: jax.ShapeDtypeStruct((), jnp.uint8)}
     spec = BlockGibbsSpec(free_blocks, [], node_sds)
