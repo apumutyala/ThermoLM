@@ -108,7 +108,7 @@ samples, _ = chromatic_gibbs_sample(ebm, init.astype(jnp.float32), 300, key, col
 
 ### Validation
 
-The suite (19 tests, run with `pytest`) checks against ground truth rather
+The suite (20 tests, run with `pytest`) checks against ground truth rather
 than just shapes:
 
 - chromatic Gibbs reproduces the **exact** enumerated Boltzmann marginals
@@ -121,7 +121,7 @@ than just shapes:
   gradient** (<0.05), and training recovers a teacher model's moments
   (`tests/unit/test_thrml_ml.py`);
 - chain-CRF log-partition/likelihood/marginals/FFBS match brute-force
-  enumeration; the THRML chain sampler matches exact marginals
+  enumeration; **both the JAX and THRML chain samplers** match exact marginals
   (`tests/unit/test_chain_crf.py`);
 - the energy is single-counted and diagonal-free; temperature scaling behaves;
   the forward-coupling THRML factor matches its energy; connectivity patterns
@@ -135,6 +135,8 @@ than just shapes:
 | [`models/connectivity.py`](thermolm_jax/models/connectivity.py) | Sparse connectivity patterns |
 | [`sampling/chromatic_gibbs.py`](thermolm_jax/sampling/chromatic_gibbs.py) | Chromatic block Gibbs (+ colouring) |
 | [`models/thrml_quadratic.py`](thermolm_jax/models/thrml_quadratic.py) | jit/grad-safe THRML sampler (`THRMLIsingSampler`) |
+| [`sampling/chain_mrf_thrml.py`](thermolm_jax/sampling/chain_mrf_thrml.py) | THRML chain-CRF sampler (TSU path) |
+| [`sampling/chain_gibbs_jax.py`](thermolm_jax/sampling/chain_gibbs_jax.py) | JAX chromatic Gibbs chain-CRF sampler (GPU baseline) |
 | [`training/contrastive_divergence.py`](thermolm_jax/training/contrastive_divergence.py) | CD loss/step |
 | [`training/thrml_ml.py`](thermolm_jax/training/thrml_ml.py) | THRML-native ML trainer (exact positive phase) |
 | [`scripts/dtm_ising_demo.py`](scripts/dtm_ising_demo.py) | End-to-end demo (3 parts) |
@@ -155,9 +157,10 @@ discrete diffusion whose reverse step is a linear-chain CRF** sampled on THRML:
   approximate.
 - **Training** is exact conditional ML of the chain CRF (`models/chain_crf.py`,
   forward algorithm for `log Z` — no MCMC).
-- **Generation** samples the chain CRF jointly at each reverse step, either exactly
-  (forward-filter backward-sample) or on **THRML** (`sampling/chain_mrf_thrml.py`,
-  the TSU path), validated against the exact forward–backward marginals.
+- Generation samples the chain CRF jointly at each reverse step, either exactly
+  (forward-filter backward-sample), on **THRML** (`sampling/chain_mrf_thrml.py`,
+  the TSU path), or via **JAX chromatic Gibbs on GPU** (`sampling/chain_gibbs_jax.py`,
+  the fair GPU baseline), all validated against the exact forward–backward marginals.
 
 ```bash
 # offline sanity run (tiny, CPU, embedded corpus)
@@ -191,12 +194,14 @@ samplers side by side.
 
 Because the reverse step admits **exact inference**, every hardware-shaped
 approximation is measurable:
-[`scripts/exp_sweep_budget.py`](scripts/exp_sweep_budget.py) plots the TV
-distance between THRML block-Gibbs marginals and the exact forward–backward
-marginals as a function of the Gibbs sweep budget, with the exact-FFBS
-finite-sample noise floor — for random potentials or a trained checkpoint's
-actual reverse step (`--ckpt`). The scaling research programme built on this
-instrument is in [`docs/RESEARCH_ROADMAP.md`](docs/RESEARCH_ROADMAP.md).
+[`scripts/exp_sweep_budget.py`](scripts/exp_sweep_budget.py) runs a **three-way
+head-to-head** — exact FFBS vs. JAX chromatic Gibbs on GPU vs. THRML block
+Gibbs — on the same chain-CRF distribution. It reports total-variation distance
+to the exact forward–backward marginals and sample log-likelihood under the exact
+CRF, as a function of both **sweep budget** and **wall-clock time**. This is the
+fair GPU-vs-thermodynamic comparison Zach's critique calls for. The scaling
+research programme built on this instrument is in
+[`docs/RESEARCH_ROADMAP.md`](docs/RESEARCH_ROADMAP.md).
 
 ### Results
 
@@ -253,25 +258,22 @@ what EDLM approximates.
 | `scripts/train_distributed.py` | Multi-GPU (`pmap`) training on WikiText-2 or custom text | `--dataset`, `--iters`, `--seq_len`, `--hidden`, `--layers`, `--batch`, `--gpu` |
 | `scripts/eval_charlm.py` | Evaluation: held-out bits/char + generation samples | `--ckpt`, `--val_text`, `--n_samples`, `--temperature` |
 | `scripts/generate_charlm.py` | Standalone generation from checkpoint | `--ckpt`, `--n`, `--thrml` |
-| `scripts/exp_sweep_budget.py` | Exactness-anchored fidelity-vs-sweeps experiment | `--random-potentials`, `--ckpt`, `--sweeps`, `--n-chains` |
+| `scripts/exp_sweep_budget.py` | Exactness-anchored fidelity-vs-sweeps / fair GPU-vs-THRML comparison | `--random-potentials`, `--ckpt`, `--sweeps`, `--n-chains`, `--samplers` |
 | `scripts/dtm_ising_demo.py` | Ising EBM demo (sampling + CD + THRML-native ML) | — |
 
 ### RunPod deployment (GPU training)
 
-The `runpod/` directory contains one-command deployment scripts:
+Use [`scripts/runpod_setup.sh`](scripts/runpod_setup.sh): a single paste-into-pod
+script that installs the repo, runs the CPU test suite, trains TinyShakespeare,
+runs the three-way sweep-budget oracle, and optionally trains WikiText-2 on 2×A100
+if available. It packages everything into a dated tarball for easy download.
 
 ```bash
-# One-time setup
-bash runpod/setup.sh
-
-# TinyShakespeare single-GPU run
-bash runpod/train.sh
-
-# WikiText-2 distributed 2×A100 run
-bash runpod/train_distributed.sh
+# On a fresh RunPod A100/H100 pod
+bash scripts/runpod_setup.sh
 ```
 
-Both scripts set XLA GPU performance flags (`--xla_gpu_triton_gemm_any=True`,
+The script also sets XLA GPU performance flags (`--xla_gpu_triton_gemm_any=True`,
 `--xla_gpu_enable_latency_hiding_scheduler=true`) and bfloat16 matmul
 precision for A100/H100 Tensor Cores.
 

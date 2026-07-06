@@ -19,6 +19,7 @@ from thermolm_jax.models.chain_crf import (
     chain_sample,
 )
 from thermolm_jax.sampling.chain_mrf_thrml import sample_chain_thrml_single
+from thermolm_jax.sampling.chain_gibbs_jax import sample_chain_jax_gibbs
 
 pytestmark = pytest.mark.unit
 
@@ -88,6 +89,19 @@ def test_thrml_samples_match_exact_marginals():
     _, _, _, marg_exact = _enumerate(unary, pairwise)
     samples = np.asarray(
         sample_chain_thrml_single(
+            unary, pairwise, jax.random.PRNGKey(0), n_chains=6000, n_warmup=200
+        )
+    )
+    emp = np.stack([(samples == v).mean(0) for v in range(V)], axis=1)
+    assert np.abs(emp - marg_exact).max() < 0.05
+
+
+def test_jax_chromatic_gibbs_matches_exact_marginals():
+    """JAX chromatic block Gibbs is the fair GPU baseline for THRML."""
+    unary, pairwise = _random_potentials(seed=6, scale=1.0)
+    _, _, _, marg_exact = _enumerate(unary, pairwise)
+    samples = np.asarray(
+        sample_chain_jax_gibbs(
             unary, pairwise, jax.random.PRNGKey(0), n_chains=6000, n_warmup=200
         )
     )

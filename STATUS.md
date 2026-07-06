@@ -8,8 +8,10 @@ is not imported by the package.
 two confirmed defects fixed with regression tests (see "Fixed defects" below);
 THRML-native maximum-likelihood training added and validated against exact
 gradients; codebase audited line-by-line against Extropic's published
-[thrml-skill](https://github.com/extropic-ai/thrml-skill) conventions. Suite:
-**19 tests, all against ground truth.**
+[thrml-skill](https://github.com/extropic-ai/thrml-skill) conventions; a **JAX
+chromatic Gibbs baseline** added for chain CRFs and a **three-way fair head-to-head**
+(exact FFBS vs. GPU vs. THRML) implemented in the sweep-budget experiment. Suite:
+**20 tests, all against ground truth.**
 
 ## ✅ Validated core
 
@@ -69,8 +71,10 @@ THRML.
   against brute-force enumeration (`tests/unit/test_chain_crf.py`).
 - THRML chain sampler with correct even/odd 2-colouring; samples match exact
   CRF marginals.
+- JAX chromatic Gibbs chain sampler on GPU — the fair GPU baseline — also
+  matches exact CRF marginals.
 - Training by exact conditional ML (no MCMC); generation samples the chain CRF
-  jointly, exactly or on THRML.
+  jointly, exactly, on THRML, or via JAX-GPU block Gibbs.
 - **Distributed training** via JAX `pmap` across multiple GPUs, with gradient
   all-reduce (`pmean`) and bfloat16 Tensor Core acceleration.
 
@@ -84,11 +88,11 @@ fallback validated.
 - `examples/lm_on_thrml.ipynb` — self-contained CPU notebook (THRML docs
   style, upstream-contributable): chain CRF as a THRML factor graph, fidelity
   vs sweep budget against the exact oracle, LM training, dual-path generation.
-- `scripts/exp_sweep_budget.py` — the exactness anchor: TV distance between
-  THRML block-Gibbs marginals and exact forward–backward marginals vs sweep
-  budget, with the exact-FFBS noise floor; random potentials or a trained
-  checkpoint's reverse step. `generate(..., thrml_warmup=k)` exposes the
-  budget at generation time.
+- `scripts/exp_sweep_budget.py` — the exactness anchor and fair head-to-head:
+  TV distance and exact-CRF log-likelihood for **exact FFBS vs. JAX-GPU chromatic
+  Gibbs vs. THRML block Gibbs**, vs. both sweep budget and wall-clock time, on
+  random potentials or a trained checkpoint's reverse step. This is the
+  GPU-vs-thermodynamic comparison Zach's critique says is missing.
 - `docs/RESEARCH_ROADMAP.md` — the three-aim scaling programme (budget curves,
   banded graphs beyond exact inference, latent-spin corrections).
 
